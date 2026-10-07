@@ -242,4 +242,6 @@ keep changes in that spirit.
   <img src="docs/icon.png" width="64" height="64" alt="">
   <br>
   <sub>MIT licensed. See <a href="LICENSE">LICENSE</a>.</sub>
+  <br>
+  <sub>Pinwire is a fork of <a href="https://github.com/alejandrobujan/tendedero">Tendedero</a> by <a href="https://alejandrobujan.com">Alejandro Buján</a>, extended with clipboard history.</sub>
 </p>
