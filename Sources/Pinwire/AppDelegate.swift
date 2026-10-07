@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// ignores the screenshot settings (macOS 27 renamed one), captures keep
     /// landing on the Desktop, and they still hang on the line.
     private var safetyWatcher: ScreenshotWatcher?
+    private var clipboard: ClipboardWatcher!
     private var signalSources: [DispatchSourceSignal] = []
     private var hotKey: HotKey?
     private var cancellables = Set<AnyCancellable>()
@@ -40,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var wanted = false
     /// Set when you open the line on purpose, so it stays up while empty.
     private var keepOpen = false
-    private var lastLiveCount = 0
+    private var lastNewestID: UUID?
     /// The screen a new capture was taken on: the line goes there.
     private var pendingScreen: NSScreen?
 
@@ -54,8 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Inbox.isEnabled { Inbox.apply() }
         restoreSettingsOnTermination()
         startWatcher()
+        clipboard = ClipboardWatcher { [weak self] clip in self?.line.hang(clip) }
+        if Self.clipsEnabled { clipboard.start() }
+        lastNewestID = line.newest?.id
+        DispatchQueue.main.async { [weak self] in self?.restoring = false }
 
-        hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: controlKey | optionKey) { [weak self] in
+        hotKey = HotKey(keyCode: kVK_ANSI_P, modifiers: controlKey | optionKey) { [weak self] in
             self?.toggle()
         }
 
@@ -93,6 +98,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !Inbox.wasOffered {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.offerInbox() }
+        }
+        // Copied items are offered once too, after the screenshot question.
+        if !UserDefaults.standard.bool(forKey: "clipsOffered") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                UserDefaults.standard.set(true, forKey: "clipsOffered")
+                self?.setClips(true)
+            }
         }
 
         if !UserDefaults.standard.bool(forKey: "welcomed") {
@@ -147,14 +159,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func offerInbox() {
         Inbox.wasOffered = true
         let alert = NSAlert()
-        alert.messageText = L("Let Tendedero handle your screenshots?",
-                              "¿Quieres que Tendedero se encargue de tus capturas?")
+        alert.messageText = L("Let Pinwire handle your screenshots?",
+                              "¿Quieres que Pinwire se encargue de tus capturas?")
         alert.informativeText = L(
-            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Tendedero quits.",
-            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de Tendedero.")
+            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Pinwire quits.",
+            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de Pinwire.")
         alert.addButton(withTitle: L("Turn on", "Activar"))
         alert.addButton(withTitle: L("Not now", "Ahora no"))
-        if let icon = NSImage(named: "Tendedero") ?? NSApp.applicationIconImage { alert.icon = icon }
+        if let icon = NSImage(named: "Pinwire") ?? NSApp.applicationIconImage { alert.icon = icon }
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn { setInbox(true) }
     }
@@ -178,13 +190,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func itemsChanged() {
         let live = line.liveCount
-        if live > lastLiveCount {
+        let newest = line.newest
+        if let newest, newest.id != lastNewestID, !restoring {
             panel.placeOnScreen(pendingScreen)
             pendingScreen = nil
             updateCapacity()
             wanted = true
             refresh()
-            reveal(peekFor: 2.5)
+            // A copy only peeks in briefly: copying is constant, screenshots are not.
+            reveal(peekFor: newest.clip != nil ? 1.2 : 2.5)
         } else if live == 0 && !keepOpen {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                 guard let self, self.line.liveCount == 0, !self.keepOpen else { return }
@@ -192,8 +206,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.refresh()
             }
         }
-        lastLiveCount = live
+        lastNewestID = newest?.id
     }
+
+    /// Items restored at launch are not new arrivals.
+    private var restoring = true
 
     // MARK: The capture flying to the line
 
@@ -449,7 +466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "tshirt", accessibilityDescription: "Tendedero")
+        let image = NSImage(systemSymbolName: "pin", accessibilityDescription: "Pinwire")
         image?.isTemplate = true
         statusItem.button?.image = image
         let menu = NSMenu()
@@ -460,11 +477,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
-        let toggleItem = ClosureMenuItem(isRevealed ? L("Hide line", "Ocultar tendedero")
-                                                 : L("Show line", "Mostrar tendedero")) { [weak self] in
+        let toggleItem = ClosureMenuItem(isRevealed ? L("Hide wire", "Ocultar el cable")
+                                                 : L("Show wire", "Mostrar el cable")) { [weak self] in
             self?.toggle()
         }
-        toggleItem.keyEquivalent = "t"
+        toggleItem.keyEquivalent = "p"
         toggleItem.keyEquivalentModifierMask = [.control, .option]
         menu.addItem(toggleItem)
 
@@ -481,6 +498,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         inbox.toolTip = L("Screenshots hang instantly and skip the Desktop",
                           "Las capturas se cuelgan al instante y no pasan por el Escritorio")
         menu.addItem(inbox)
+
+        let blocked = clipboard.isBlocked
+        let clipsTitle = blocked ? L("Pin copied items (blocked in Privacy & Security)",
+                                     "Fijar lo que copies (bloqueado en Privacidad y seguridad)")
+                                 : L("Pin copied items", "Fijar lo que copies")
+        let clips = ClosureMenuItem(clipsTitle) { [weak self] in
+            guard let self else { return }
+            if blocked {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+            } else {
+                self.setClips(!Self.clipsEnabled)
+            }
+        }
+        clips.state = Self.clipsEnabled && !blocked ? .on : .off
+        clips.toolTip = L("Anything you copy is kept on this Mac and pinned to the wire. Passwords marked private are skipped.",
+                          "Todo lo que copies se guarda en este Mac y se fija en el cable. Se omiten las contraseñas marcadas como privadas.")
+        menu.addItem(clips)
 
         menu.addItem(ClosureMenuItem(L("Open screenshots folder", "Abrir carpeta de capturas")) { [weak self] in
             guard let self else { return }
@@ -503,9 +537,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(login)
 
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(L("Quit Tendedero", "Salir de Tendedero"), key: "q") {
+        menu.addItem(ClosureMenuItem(L("Quit Pinwire", "Salir de Pinwire"), key: "q") {
             NSApp.terminate(nil)
         })
+    }
+
+    /// Off until you say yes: keeping what you copy is your call.
+    private static var clipsEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "clipsOn") }
+        set { UserDefaults.standard.set(newValue, forKey: "clipsOn") }
+    }
+
+    /// Turning it on explains what is kept, once, before anything is read.
+    private func setClips(_ on: Bool) {
+        if on && !UserDefaults.standard.bool(forKey: "clipsExplained") {
+            let alert = NSAlert()
+            alert.messageText = L("Pin what you copy?", "¿Fijar lo que copies?")
+            alert.informativeText = L(
+                "Pinwire will keep what you copy on this Mac and show it on the wire, so you can copy it again. Copies that apps mark as private, like passwords, are skipped. Taking an item down deletes it. macOS may ask you to allow Pinwire to read the clipboard.",
+                "Pinwire guardará lo que copies en este Mac y lo mostrará en el cable para volver a copiarlo. Se omite lo que las apps marcan como privado, como las contraseñas. Al descolgar un elemento se borra. Puede que macOS te pida permitir que Pinwire lea el portapapeles.")
+            alert.addButton(withTitle: L("Turn on", "Activar"))
+            alert.addButton(withTitle: L("Not now", "Ahora no"))
+            if let icon = NSApp.applicationIconImage { alert.icon = icon }
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            UserDefaults.standard.set(true, forKey: "clipsExplained")
+        }
+        Self.clipsEnabled = on
+        if on { clipboard.start() } else { clipboard.stop() }
     }
 
     private static func toggleLaunchAtLogin() {
@@ -518,8 +577,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             let alert = NSAlert()
             alert.messageText = L("Could not change the login setting", "No se pudo cambiar el inicio de sesión")
-            alert.informativeText = L("Move Tendedero to the Applications folder and try again.",
-                                      "Mueve Tendedero a la carpeta Aplicaciones y vuelve a intentarlo.")
+            alert.informativeText = L("Move Pinwire to the Applications folder and try again.",
+                                      "Mueve Pinwire a la carpeta Aplicaciones y vuelve a intentarlo.")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }

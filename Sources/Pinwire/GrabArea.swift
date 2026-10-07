@@ -28,7 +28,13 @@ struct GrabArea: NSViewRepresentable {
         let id = item.id
         let line = line
         view.url = item.url
+        view.clip = item.clip
         view.dragImage = item.thumb
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityLabel(item.clip?.accessibilityText ?? L("Screenshot ", "Captura ") + item.url.lastPathComponent)
+        view.setAccessibilityHelp(L("Click to copy. Use the context menu for more.",
+                                    "Haz clic para copiar. Usa el menú contextual para más."))
         view.onClick = { line.copy(id) }
         view.onDoubleClick = { line.open(id) }
         view.onDragStart = { line.draggingID = id }
@@ -43,6 +49,16 @@ struct GrabArea: NSViewRepresentable {
         view.onPressChange = { pressed in line.pressedID = pressed ? id : nil }
         view.menuProvider = {
             let menu = NSMenu()
+            if let clip = item.clip {
+                menu.addItem(ClosureMenuItem(L("Copy", "Copiar")) { line.copy(id) })
+                if clip.canOpen { menu.addItem(ClosureMenuItem(L("Open", "Abrir")) { line.open(id) }) }
+                if !clip.fileURLs.isEmpty {
+                    menu.addItem(ClosureMenuItem(L("Show in Finder", "Mostrar en Finder")) { line.reveal(id) })
+                }
+                menu.addItem(.separator())
+                menu.addItem(ClosureMenuItem(L("Take down", "Descolgar")) { line.discard(id) })
+                return menu
+            }
             menu.addItem(ClosureMenuItem(L("Copy", "Copiar")) { line.copy(id) })
             menu.addItem(ClosureMenuItem(L("Open", "Abrir")) { line.open(id) })
             menu.addItem(ClosureMenuItem(L("Markup", "Marcación")) { line.markup(id) })
@@ -67,6 +83,7 @@ final class GrabView: NSView, NSDraggingSource {
     static var isDragging = false
 
     var url: URL?
+    var clip: Clip?
     var dragImage: NSImage?
     var onClick: () -> Void = {}
     var onDoubleClick: () -> Void = {}
@@ -139,9 +156,14 @@ final class GrabView: NSView, NSDraggingSource {
         startedDrag = true
         endPress()
 
-        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
-        item.setDraggingFrame(imageFrame(), contents: dragImage)
-        let session = beginDraggingSession(with: [item], event: event, source: self)
+        // A copied item is dragged as what was copied, not as Pinwire's file.
+        let writers: [NSPasteboardWriting] = clip?.pasteboardItems() ?? [url as NSURL]
+        let items = writers.map { writer in
+            let item = NSDraggingItem(pasteboardWriter: writer)
+            item.setDraggingFrame(imageFrame(), contents: dragImage)
+            return item
+        }
+        let session = beginDraggingSession(with: items, event: event, source: self)
         // Released where nothing accepts it: it flies back to the line.
         session.animatesToStartingPositionsOnCancelOrFail = true
         GrabView.isDragging = true
@@ -155,6 +177,11 @@ final class GrabView: NSView, NSDraggingSource {
         didLongPress = false
     }
 
+    override func accessibilityPerformPress() -> Bool {
+        onClick()
+        return true
+    }
+
     override func rightMouseDown(with event: NSEvent) {
         NSMenu.popUpContextMenu(menuProvider(), with: event, for: self)
     }
@@ -165,7 +192,9 @@ final class GrabView: NSView, NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         // Apps pick copy. Finder picks move, so a folder or the Desktop keeps
         // the file. Delete is what lets the Dock's Trash accept it.
-        context == .outsideApplication ? [.copy, .move, .delete] : []
+        // A copied item is only ever handed out as a copy.
+        guard context == .outsideApplication else { return [] }
+        return clip == nil ? [.copy, .move, .delete] : [.copy, .delete]
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {

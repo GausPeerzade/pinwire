@@ -2,13 +2,15 @@ import AppKit
 import Combine
 import os
 
-let log = Logger(subsystem: "app.tendedero.Tendedero", category: "line")
+let log = Logger(subsystem: "app.pinwire.Pinwire", category: "line")
 
 /// One screenshot hanging on the line.
 struct Pegged: Identifiable, Equatable {
     let id = UUID()
     let url: URL
     var thumb: NSImage
+    /// Set when it is something copied rather than a screenshot.
+    var clip: Clip?
     /// Every photo hangs a little crooked, like on a real line.
     let tilt = Double.random(in: -2.5...2.5)
     var falling = false
@@ -56,10 +58,13 @@ final class Line: ObservableObject {
     // MARK: Hanging and dropping
 
     @discardableResult
-    func hang(_ url: URL, quietly: Bool = false, flying: Bool = false) -> UUID? {
-        guard !items.contains(where: { $0.url == url && !$0.falling }),
-              let thumb = makeThumbnail(url) else { return nil }
+    func hang(_ url: URL, quietly: Bool = false, flying: Bool = false, clip given: Clip? = nil) -> UUID? {
+        guard !items.contains(where: { $0.url == url && !$0.falling }) else { return nil }
+        let clip = given ?? (Clip.isClip(url) ? Clip.load(url) : nil)
+        if Clip.isClip(url) && clip == nil { return nil }
+        guard let thumb = clip?.thumbnail() ?? makeThumbnail(url) else { return nil }
         var item = Pegged(url: url, thumb: thumb)
+        item.clip = clip
         item.flying = flying
         items.append(item)
         // A full line lets the oldest photo fall off the far end.
@@ -70,6 +75,28 @@ final class Line: ObservableObject {
         if !quietly { play("Tink", volume: 0.35) }
         return item.id
     }
+
+    /// Something was copied. Copying the same thing again moves it to the
+    /// newest end instead of hanging it twice.
+    func hang(_ clip: Clip) {
+        let signature = clip.signature
+        let live = items.filter { !$0.falling }
+        if live.last?.clip?.signature == signature { return }
+        let url: URL
+        do {
+            url = try clip.save()
+        } catch {
+            // Nothing already on the line is lost when saving fails.
+            log.error("Could not keep a copied item: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        for old in live where old.clip?.signature == signature { drop(old.id, quietly: true) }
+        if hang(url, clip: clip) == nil { try? FileManager.default.removeItem(at: url) }
+    }
+
+    /// The newest thing on the line, to notice arrivals even when a full
+    /// line drops one as another comes in.
+    var newest: Pegged? { items.last(where: { !$0.falling }) }
 
     /// The capture has reached the line: the real card takes over.
     func land(_ id: UUID) {
@@ -88,8 +115,14 @@ final class Line: ObservableObject {
         hitRects[id] = nil
         save()
         if !quietly { play("Pop", volume: 0.25) }
+        // A copied item lives only on the line: its file goes with it.
+        let clipFile = items[i].clip != nil ? items[i].url : nil
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            self?.items.removeAll { $0.id == id }
+            guard let self else { return }
+            self.items.removeAll { $0.id == id }
+            if let clipFile, !self.items.contains(where: { $0.url == clipFile }) {
+                try? FileManager.default.removeItem(at: clipFile)
+            }
         }
     }
 
@@ -113,12 +146,17 @@ final class Line: ObservableObject {
 
     func copy(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
-        let entry = NSPasteboardItem()
-        if let png = pngData(item.url) { entry.setData(png, forType: .png) }
-        entry.setString(item.url.absoluteString, forType: .fileURL)
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.writeObjects([entry])
+        if let clip = item.clip {
+            clip.write()
+        } else {
+            let entry = NSPasteboardItem()
+            if let png = pngData(item.url) { entry.setData(png, forType: .png) }
+            entry.setString(item.url.absoluteString, forType: .fileURL)
+            entry.setData(Data(), forType: ClipboardWatcher.ownType)
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            pb.writeObjects([entry])
+        }
 
         copiedID = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
@@ -128,6 +166,10 @@ final class Line: ObservableObject {
 
     func open(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
+        if let clip = item.clip {
+            if clip.canOpen { clip.open() } else { copy(id) }
+            return
+        }
         NSWorkspace.shared.open(item.url)
     }
 
@@ -136,6 +178,12 @@ final class Line: ObservableObject {
     /// is the source app's job, as Finder does.
     func trash(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
+        // A copied item has no file of yours to trash, only its own record.
+        if item.clip != nil {
+            if soundOn { Line.trashSound?.play() }
+            drop(id, quietly: true)
+            return
+        }
         do {
             try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
             log.notice("Trashed \(item.url.lastPathComponent, privacy: .public)")
@@ -151,7 +199,7 @@ final class Line: ObservableObject {
         contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/dock/drag to trash.aif",
         byReference: true)
 
-    /// Whether the file lives in Tendedero's own folder. Those are discarded
+    /// Whether the file lives in Pinwire's own folder. Those are discarded
     /// to the Trash, or the folder would fill up with forgotten screenshots.
     /// Files anywhere else, like the Desktop, stay where they are.
     func isInInbox(_ id: UUID) -> Bool {
@@ -161,7 +209,11 @@ final class Line: ObservableObject {
 
     /// The corner cross and "Take down" both end up here.
     func discard(_ id: UUID) {
-        if isInInbox(id) { trash(id) } else { drop(id) }
+        if isClip(id) { drop(id) } else if isInInbox(id) { trash(id) } else { drop(id) }
+    }
+
+    func isClip(_ id: UUID) -> Bool {
+        items.first(where: { $0.id == id })?.clip != nil
     }
 
     /// Inbox mode: keep a screenshot by moving it to the Desktop.
@@ -193,6 +245,7 @@ final class Line: ObservableObject {
     /// Long press: open the photo in the system Markup editor.
     func markup(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
+        if item.clip != nil { return open(id) }
         Markup.shared.edit(item.url)
     }
 
@@ -205,7 +258,8 @@ final class Line: ObservableObject {
 
     func reveal(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([item.url])
+        let files = item.clip?.fileURLs ?? [item.url]
+        if !files.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(files) }
     }
 
     // MARK: Breeze
@@ -215,7 +269,9 @@ final class Line: ObservableObject {
     private func scheduleGust() {
         DispatchQueue.main.asyncAfter(deadline: .now() + .random(in: 7...16)) { [weak self] in
             guard let self else { return }
-            if !self.items.isEmpty && self.draggingID == nil { self.gust += 1 }
+            // Only while the line is down: a breeze nobody sees still costs
+            // seconds of spring animation on every card.
+            if self.revealed && !self.items.isEmpty && self.draggingID == nil { self.gust += 1 }
             self.scheduleGust()
         }
     }
@@ -231,6 +287,13 @@ final class Line: ObservableObject {
         let paths = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
         for path in paths where FileManager.default.fileExists(atPath: path) {
             hang(URL(fileURLWithPath: path), quietly: true)
+        }
+        // Copied items that are no longer on the line are not kept around.
+        let fm = FileManager.default
+        let kept = Set(items.map(\.url.standardizedFileURL.path))
+        for url in (try? fm.contentsOfDirectory(at: Clip.folder, includingPropertiesForKeys: nil)) ?? []
+        where !kept.contains(url.standardizedFileURL.path) {
+            try? fm.removeItem(at: url)
         }
     }
 

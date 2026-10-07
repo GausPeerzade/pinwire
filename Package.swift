@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Tendedero",
+    name: "Pinwire",
     platforms: [.macOS(.v14)],
     targets: [
-        .executableTarget(name: "Tendedero", path: "Sources/Tendedero")
+        .executableTarget(name: "Pinwire", path: "Sources/Pinwire")
     ]
 )

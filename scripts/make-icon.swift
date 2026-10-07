@@ -1,5 +1,5 @@
-// Draws the Tendedero app icon: two screenshots in crisp glass frames,
-// held by aluminium clips on a thin line, over a soft gradient.
+// Draws the Pinwire app icon: a taut wire across a deep teal square, with
+// a note and a picture pinned to it by two round push pins.
 // Usage: swift scripts/make-icon.swift out.png
 import AppKit
 
@@ -19,7 +19,7 @@ func color(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> NSColo
 
 func shadow(_ alpha: CGFloat, blur: CGFloat, y: CGFloat) {
     let s = NSShadow()
-    s.shadowColor = color(20, 24, 48, alpha)
+    s.shadowColor = NSColor(white: 0, alpha: alpha)
     s.shadowBlurRadius = blur
     s.shadowOffset = NSSize(width: 0, height: y)
     s.set()
@@ -30,143 +30,102 @@ let body = NSRect(x: 100, y: 100, width: 824, height: 824)
 let shape = NSBezierPath(roundedRect: body, xRadius: 185, yRadius: 185)
 
 ctx.saveGState()
-shadow(0.30, blur: 26, y: -12)
-color(200, 210, 240).setFill()
+shadow(0.35, blur: 26, y: -12)
+color(14, 40, 48).setFill()
 shape.fill()
 ctx.restoreGState()
 
 ctx.saveGState()
 shape.addClip()
-NSGradient(colors: [color(132, 170, 255), color(176, 160, 250), color(255, 190, 196)],
-           atLocations: [0, 0.55, 1], colorSpace: .sRGB)!
-    .draw(in: body, angle: -60)
-// Soft light from the top.
-NSGradient(colors: [color(255, 255, 255, 0.35), color(255, 255, 255, 0)])!
-    .draw(in: NSRect(x: body.minX, y: body.midY, width: body.width, height: body.height / 2), angle: -90)
+NSGradient(colors: [color(10, 34, 44), color(18, 92, 98), color(40, 150, 140)],
+           atLocations: [0, 0.6, 1], colorSpace: .sRGB)!
+    .draw(in: body, angle: 70)
 
-// The line
-let left = NSPoint(x: 60, y: 700), right = NSPoint(x: 964, y: 700)
-let control = NSPoint(x: 512, y: 590)
-func lineY(_ x: CGFloat) -> CGFloat {
-    let t = (x - left.x) / (right.x - left.x)
-    return (1 - t) * (1 - t) * left.y + 2 * (1 - t) * t * control.y + t * t * right.y
-}
-func linePath() -> NSBezierPath {
-    let p = NSBezierPath()
-    p.move(to: left)
-    p.curve(to: right,
-            controlPoint1: NSPoint(x: left.x + (control.x - left.x) * 2 / 3, y: left.y + (control.y - left.y) * 2 / 3),
-            controlPoint2: NSPoint(x: right.x + (control.x - right.x) * 2 / 3, y: right.y + (control.y - right.y) * 2 / 3))
-    return p
-}
+// The wire: straight and taut, slightly rising to the right.
+func wireY(_ x: CGFloat) -> CGFloat { 688 + (x - 512) * 0.06 }
+let wire = NSBezierPath()
+wire.move(to: NSPoint(x: 60, y: wireY(60)))
+wire.line(to: NSPoint(x: 964, y: wireY(964)))
 ctx.saveGState()
-shadow(0.25, blur: 8, y: -5)
-let line = linePath()
-line.lineWidth = 9
-color(110, 116, 140).setStroke()
-line.stroke()
+shadow(0.45, blur: 8, y: -5)
+wire.lineWidth = 9
+color(226, 236, 236).setStroke()
+wire.stroke()
 ctx.restoreGState()
-let highlight = linePath()
-highlight.lineWidth = 3
-highlight.transform(using: AffineTransform(translationByX: 0, byY: 2))
-color(255, 255, 255, 0.55).setStroke()
-highlight.stroke()
 
-// A screenshot in a glass frame, hanging from a clip.
-func hang(centerX: CGFloat, width: CGFloat, height: CGFloat, angle: CGFloat, content: (NSRect) -> Void) {
-    let top = lineY(centerX) + 34
+/// A card hanging from a pin near its top, rotated about the pin.
+func card(pinX: CGFloat, width: CGFloat, height: CGFloat, angle: CGFloat, content: (NSRect) -> Void) {
+    let pin = NSPoint(x: pinX, y: wireY(pinX))
     ctx.saveGState()
-    ctx.translateBy(x: centerX, y: top)
+    ctx.translateBy(x: pin.x, y: pin.y)
     ctx.rotate(by: angle * .pi / 180)
-
-    let radius: CGFloat = 64, inset: CGFloat = 18
-    let frame = NSRect(x: -width / 2, y: -height, width: width, height: height)
-    let framePath = NSBezierPath(roundedRect: frame, xRadius: radius, yRadius: radius)
-
-    // Glass: translucent white body, soft shadow, top-lit edge.
+    let rect = NSRect(x: -width / 2, y: -height + 26, width: width, height: height)
+    let paper = NSBezierPath(roundedRect: rect, xRadius: 26, yRadius: 26)
     ctx.saveGState()
-    shadow(0.28, blur: 40, y: -22)
-    color(255, 255, 255, 0.42).setFill()
-    framePath.fill()
+    shadow(0.42, blur: 30, y: -16)
+    color(250, 249, 245).setFill()
+    paper.fill()
     ctx.restoreGState()
-    NSGradient(colors: [color(255, 255, 255, 0.30), color(255, 255, 255, 0.05)])!
-        .draw(in: framePath, angle: -90)
-
-    let photoRect = frame.insetBy(dx: inset, dy: inset)
-    let photoPath = NSBezierPath(roundedRect: photoRect, xRadius: radius - inset, yRadius: radius - inset)
     ctx.saveGState()
-    photoPath.addClip()
-    content(photoRect)
+    paper.addClip()
+    content(rect)
+    ctx.restoreGState()
     ctx.restoreGState()
 
-    // Top-lit edge: a thin ring, brighter at the top.
+    // The push pin: a glossy coral head over its own shadow.
     ctx.saveGState()
-    let ring = NSBezierPath(roundedRect: frame, xRadius: radius, yRadius: radius)
-    ring.append(NSBezierPath(roundedRect: frame.insetBy(dx: 4, dy: 4), xRadius: radius - 4, yRadius: radius - 4))
-    ring.windingRule = .evenOdd
-    ring.addClip()
-    NSGradient(colors: [color(255, 255, 255, 0.95), color(255, 255, 255, 0.30)])!.draw(in: frame, angle: -90)
+    shadow(0.5, blur: 10, y: -7)
+    let head = NSRect(x: pin.x - 34, y: pin.y - 34, width: 68, height: 68)
+    NSGradient(colors: [color(255, 140, 110), color(232, 70, 60)])!
+        .draw(in: NSBezierPath(ovalIn: head), relativeCenterPosition: NSPoint(x: -0.35, y: 0.4))
     ctx.restoreGState()
-
-    // Aluminium clip
-    let clip = NSRect(x: -15, y: -58, width: 30, height: 86)
-    let clipPath = NSBezierPath(roundedRect: clip, xRadius: 11, yRadius: 11)
-    ctx.saveGState()
-    shadow(0.35, blur: 8, y: -5)
-    color(200, 200, 205).setFill()
-    clipPath.fill()
-    ctx.restoreGState()
-    NSGradient(colors: [color(170, 172, 180), color(240, 241, 245), color(212, 214, 220), color(150, 152, 160)],
-               atLocations: [0, 0.35, 0.65, 1], colorSpace: .sRGB)!
-        .draw(in: clipPath, angle: 0)
-    color(40, 40, 50, 0.35).setFill()
-    NSBezierPath(roundedRect: NSRect(x: -9, y: -6, width: 18, height: 5), xRadius: 2.5, yRadius: 2.5).fill()
-    clipPath.lineWidth = 2
-    color(255, 255, 255, 0.7).setStroke()
-    clipPath.stroke()
-
-    ctx.restoreGState()
+    color(255, 255, 255, 0.75).setFill()
+    NSBezierPath(ovalIn: NSRect(x: pin.x - 18, y: pin.y + 4, width: 18, height: 13)).fill()
 }
 
-// Left: a small app window.
-hang(centerX: 330, width: 340, height: 400, angle: 3) { r in
-    color(248, 249, 252).setFill(); r.fill()
-    let bar = NSRect(x: r.minX, y: r.maxY - 56, width: r.width, height: 56)
-    color(232, 234, 240).setFill(); bar.fill()
-    for (i, c) in [color(255, 95, 87), color(254, 188, 46), color(40, 200, 64)].enumerated() {
-        c.setFill()
-        NSBezierPath(ovalIn: NSRect(x: r.minX + 26 + CGFloat(i) * 30, y: bar.midY - 9, width: 18, height: 18)).fill()
-    }
-    color(100, 120, 255).setFill()
-    NSBezierPath(roundedRect: NSRect(x: r.minX + 26, y: bar.minY - 70, width: r.width * 0.55, height: 26), xRadius: 8, yRadius: 8).fill()
-    color(200, 204, 216).setFill()
-    for i in 0..<5 {
-        let w = r.width * [0.78, 0.66, 0.72, 0.5, 0.62][i]
-        NSBezierPath(roundedRect: NSRect(x: r.minX + 26, y: bar.minY - 120 - CGFloat(i) * 38, width: w, height: 16), xRadius: 8, yRadius: 8).fill()
+// A note: lines of text, the copied item.
+card(pinX: 360, width: 300, height: 360, angle: 4) { r in
+    color(40, 52, 58, 0.85).setFill()
+    let widths: [CGFloat] = [0.78, 0.62, 0.84, 0.5, 0.7]
+    for (i, w) in widths.enumerated() {
+        let y = r.maxY - 92 - CGFloat(i) * 46
+        NSBezierPath(roundedRect: NSRect(x: r.minX + 40, y: y, width: (r.width - 80) * w, height: 18),
+                     xRadius: 9, yRadius: 9).fill()
     }
 }
 
-// Right: a sunset photo.
-hang(centerX: 695, width: 320, height: 270, angle: -3) { r in
-    NSGradient(colors: [color(255, 150, 90), color(255, 110, 130), color(120, 90, 200)])!.draw(in: r, angle: 90)
-    color(255, 230, 160).setFill()
-    NSBezierPath(ovalIn: NSRect(x: r.midX - 40, y: r.minY + 60, width: 80, height: 80)).fill()
+// A picture: a small landscape, the screenshot.
+card(pinX: 664, width: 316, height: 300, angle: -5) { r in
+    let photo = r.insetBy(dx: 22, dy: 22).offsetBy(dx: 0, dy: -4)
+    NSBezierPath(roundedRect: photo, xRadius: 12, yRadius: 12).addClip()
+    NSGradient(colors: [color(255, 200, 150), color(150, 205, 230)])!.draw(in: photo, angle: 90)
+    color(255, 240, 200).setFill()
+    NSBezierPath(ovalIn: NSRect(x: photo.maxX - 92, y: photo.maxY - 104, width: 52, height: 52)).fill()
     let hills = NSBezierPath()
-    hills.move(to: NSPoint(x: r.minX, y: r.minY + 70))
-    hills.curve(to: NSPoint(x: r.maxX, y: r.minY + 50), controlPoint1: NSPoint(x: r.minX + r.width * 0.3, y: r.minY + 130),
-                controlPoint2: NSPoint(x: r.minX + r.width * 0.6, y: r.minY + 10))
-    hills.line(to: NSPoint(x: r.maxX, y: r.minY)); hills.line(to: NSPoint(x: r.minX, y: r.minY)); hills.close()
-    color(70, 50, 130).setFill(); hills.fill()
+    hills.move(to: NSPoint(x: photo.minX, y: photo.minY))
+    hills.line(to: NSPoint(x: photo.minX, y: photo.minY + 70))
+    hills.curve(to: NSPoint(x: photo.midX, y: photo.minY + 90),
+                controlPoint1: NSPoint(x: photo.minX + 60, y: photo.minY + 130),
+                controlPoint2: NSPoint(x: photo.midX - 50, y: photo.minY + 120))
+    hills.curve(to: NSPoint(x: photo.maxX, y: photo.minY + 110),
+                controlPoint1: NSPoint(x: photo.midX + 60, y: photo.minY + 60),
+                controlPoint2: NSPoint(x: photo.maxX - 40, y: photo.minY + 140))
+    hills.line(to: NSPoint(x: photo.maxX, y: photo.minY))
+    hills.close()
+    color(30, 120, 110).setFill()
+    hills.fill()
 }
+
+// Soft light from the top.
+NSGradient(colors: [color(255, 255, 255, 0.10), color(255, 255, 255, 0)])!
+    .draw(in: NSRect(x: body.minX, y: body.midY, width: body.width, height: body.height / 2), angle: -90)
 ctx.restoreGState()
 
-// Top-lit rim on the icon body.
-shape.lineWidth = 4
-ctx.saveGState()
-shape.addClip()
-color(255, 255, 255, 0.35).setStroke()
-shape.stroke()
-ctx.restoreGState()
+// Thin inner edge.
+let edge = NSBezierPath(roundedRect: body.insetBy(dx: 1.5, dy: 1.5), xRadius: 184, yRadius: 184)
+edge.lineWidth = 3
+color(255, 255, 255, 0.14).setStroke()
+edge.stroke()
 
 NSGraphicsContext.restoreGraphicsState()
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))
