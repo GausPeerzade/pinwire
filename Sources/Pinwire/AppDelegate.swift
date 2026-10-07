@@ -55,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Inbox.isEnabled { Inbox.apply() }
         restoreSettingsOnTermination()
         startWatcher()
-        clipboard = ClipboardWatcher { [weak self] clip in self?.line.hang(clip) }
+        clipboard = ClipboardWatcher { [weak self] clip in self?.hangClip(clip) }
         if Self.clipsEnabled { clipboard.start() }
         lastNewestID = line.newest?.id
         DispatchQueue.main.async { [weak self] in self?.restoring = false }
@@ -217,16 +217,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// A new screenshot lifts off from where it was taken and flies to its
     /// place on the line. Without a known capture area it simply drops in.
     private func hangCapture(_ url: URL) {
-        let from = captureRect(of: url)
+        // Window captures and some macOS versions do not record where the
+        // capture was taken; then it lifts off from the middle of the screen.
+        let from = captureRect(of: url) ?? centeredRect(for: url)
         if let from {
             let center = CGPoint(x: from.midX, y: from.midY)
             pendingScreen = NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) }
         }
-        guard let id = line.hang(url, flying: from != nil), let from else { return }
+        let animate = from != nil && !Self.reduceMotion
+        guard let id = line.hang(url, flying: animate), animate, let from else { return }
         // Let the line come down and lay out before measuring the landing spot.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
             self?.fly(id, from: from)
         }
+    }
+
+    /// Something copied lifts off from the pointer, where you just copied
+    /// it, and flies up to the wire as its card.
+    private func hangClip(_ clip: Clip) {
+        let mouse = NSEvent.mouseLocation
+        pendingScreen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
+        let animate = !Self.reduceMotion
+        guard let id = line.hang(clip, flying: animate), animate else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            guard let self, let item = self.line.items.first(where: { $0.id == id }) else { return }
+            let size = PeggedView.cardSize(for: item.thumb.size)
+            let from = CGRect(x: mouse.x - size.width / 2, y: mouse.y - size.height - 14,
+                              width: size.width, height: size.height)
+            self.fly(id, from: from)
+        }
+    }
+
+    private static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// A screenshot without a recorded capture area starts from the middle
+    /// of the screen under the pointer, at a third of its width.
+    private func centeredRect(for url: URL) -> CGRect? {
+        guard let screen = LinePanel.screenUnderPointer(),
+              let size = makeThumbnail(url, maxPixels: 64)?.size, size.width > 0, size.height > 0 else { return nil }
+        let frame = screen.visibleFrame
+        let w = min(frame.width / 3, frame.height / 3 * size.width / size.height)
+        let h = w * size.height / size.width
+        return CGRect(x: frame.midX - w / 2, y: frame.midY - h / 2, width: w, height: h)
     }
 
     private func fly(_ id: UUID, from: CGRect) {
@@ -237,14 +269,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         let pixels = Int(max(from.width, from.height) * screen.backingScaleFactor)
-        guard let image = makeThumbnail(item.url, maxPixels: min(3000, max(400, pixels)))?
-            .cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        let picture = item.clip != nil
+            ? rasterize(item.thumb, scale: screen.backingScaleFactor)
+            : makeThumbnail(item.url, maxPixels: min(3000, max(400, pixels)))?
+                .cgImage(forProposedRect: nil, context: nil, hints: nil)
+        guard let image = picture else {
             line.land(id)
             return
         }
         CaptureFlight.fly(image: image, from: from, to: to, tilt: CGFloat(item.tilt), on: screen) { [weak self] in
             self?.line.land(id)
         }
+    }
+
+    /// Draws a card at the screen's resolution, so the flight is sharp.
+    private func rasterize(_ image: NSImage, scale: CGFloat) -> CGImage? {
+        let s = min(scale, 1000 / max(image.size.width, 1))
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(image.size.width * s),
+                                         pixelsHigh: Int(image.size.height * s), bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = image.size
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(origin: .zero, size: image.size))
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.cgImage
     }
 
     /// A discarded card falls over the whole screen, from where it hangs.

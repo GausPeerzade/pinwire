@@ -78,20 +78,25 @@ final class Line: ObservableObject {
 
     /// Something was copied. Copying the same thing again moves it to the
     /// newest end instead of hanging it twice.
-    func hang(_ clip: Clip) {
+    @discardableResult
+    func hang(_ clip: Clip, flying: Bool = false) -> UUID? {
         let signature = clip.signature
         let live = items.filter { !$0.falling }
-        if live.last?.clip?.signature == signature { return }
+        if live.last?.clip?.signature == signature { return nil }
         let url: URL
         do {
             url = try clip.save()
         } catch {
             // Nothing already on the line is lost when saving fails.
             log.error("Could not keep a copied item: \(error.localizedDescription, privacy: .public)")
-            return
+            return nil
         }
         for old in live where old.clip?.signature == signature { drop(old.id, quietly: true) }
-        if hang(url, clip: clip) == nil { try? FileManager.default.removeItem(at: url) }
+        guard let id = hang(url, flying: flying, clip: clip) else {
+            try? FileManager.default.removeItem(at: url)
+            return nil
+        }
+        return id
     }
 
     /// The newest thing on the line, to notice arrivals even when a full
